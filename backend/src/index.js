@@ -19,6 +19,6 @@ app.get("/", (req, res) => {
 
 app.use("/api/sales", salesRouter);
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`Backend server listening on port ${PORT}`);
 });
