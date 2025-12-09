@@ -1,9 +1,9 @@
+// backend/src/routes/salesRoutes.js
 import { Router } from "express";
-import { getSales } from "../controllers/salesController.js";
+import { getSalesHandler } from "../controllers/salesController.js";
 
 const router = Router();
 
-// GET /api/sales
-router.get("/", getSales);
+router.get("/", getSalesHandler);
 
 export default router;

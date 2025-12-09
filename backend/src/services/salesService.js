@@ -1,79 +1,146 @@
-import fs from "fs";
-import path from "path";
-import csv from "csv-parser";
-import { fileURLToPath } from "url";
-import { applyFiltersAndSearch } from "../utils/filterUtils.js";
-import { paginate } from "../utils/paginationUtils.js";
+// backend/src/services/salesService.js
+import Sale from "../models/Sale.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+function parseList(value) {
+  if (!value) return [];
+  return String(value)
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
 
-let SALES_DATA = [];
-let loaded = false;
+export async function getSales(query) {
+  const {
+    page = 1,
+    limit = 20,
+    search,
+    region,
+    gender,
+    productCategory,
+    tags,
+    paymentMethod,
+    dateFrom,
+    dateTo,
+    sort,
+    sortBy,
+    sortOrder,
+  } = query;
 
-const loadData = () => {
-  return new Promise((resolve, reject) => {
-    if (loaded) return resolve(SALES_DATA);
+  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+  const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
 
-    const results = [];
-    const csvPath = path.resolve(__dirname, "../data/sales.csv");
-    fs.createReadStream(csvPath)
-      .pipe(csv())
-      .on("data", (row) => {
-        // Normalize field names as needed according to your CSV headers
-        results.push({
-          customerId: row["Customer ID"],
-          customerName: row["Customer Name"],
-          phoneNumber: row["Phone Number"],
-          gender: row["Gender"],
-          age: Number(row["Age"]) || null,
-          customerRegion: row["Customer Region"],
-          customerType: row["Customer Type"],
-          productId: row["Product ID"],
-          productName: row["Product Name"],
-          brand: row["Brand"],
-          productCategory: row["Product Category"],
-          tags: row["Tags"], // assumed comma-separated
-          quantity: Number(row["Quantity"]) || 0,
-          pricePerUnit: Number(row["Price per Unit"]) || 0,
-          discountPercentage: Number(row["Discount Percentage"]) || 0,
-          totalAmount: Number(row["Total Amount"]) || 0,
-          finalAmount: Number(row["Final Amount"]) || 0,
-          date: row["Date"],
-          paymentMethod: row["Payment Method"],
-          orderStatus: row["Order Status"],
-          deliveryType: row["Delivery Type"],
-          storeId: row["Store ID"],
-          storeLocation: row["Store Location"],
-          salespersonId: row["Salesperson ID"],
-          employeeName: row["Employee Name"]
-        });
-      })
-      .on("end", () => {
-        SALES_DATA = results;
-        loaded = true;
-        resolve(SALES_DATA);
-      })
-      .on("error", (err) => {
-        reject(err);
-      });
-  });
-};
+  const filter = {};
 
-export const fetchFilteredSales = async (queryParams) => {
-  const data = await loadData();
+  // Multi-select filters
+  const regions = parseList(region);
+  if (regions.length) {
+    filter.customerRegion = { $in: regions };
+  }
 
-  const filtered = applyFiltersAndSearch(data, queryParams);
+  const genders = parseList(gender);
+  if (genders.length) {
+    filter.gender = { $in: genders };
+  }
 
-  const { pageItems, totalItems, totalPages, currentPage } = paginate(
-    filtered,
-    queryParams.page
-  );
+  const categories = parseList(productCategory);
+  if (categories.length) {
+    filter.productCategory = { $in: categories };
+  }
+
+  const tagList = parseList(tags);
+  if (tagList.length) {
+    filter.tags = { $in: tagList };
+  }
+
+  const paymentMethods = parseList(paymentMethod);
+  if (paymentMethods.length) {
+    filter.paymentMethod = { $in: paymentMethods };
+  }
+
+  // Date range (HTML date input → yyyy-mm-dd)
+  if (dateFrom || dateTo) {
+    filter.date = {};
+    if (dateFrom) {
+      filter.date.$gte = new Date(dateFrom);
+    }
+    if (dateTo) {
+      // include the whole end day
+      const end = new Date(dateTo);
+      end.setHours(23, 59, 59, 999);
+      filter.date.$lte = end;
+    }
+  }
+
+  // Text search (customer, phone, product, employee)
+  if (search && search.trim()) {
+    const regex = new RegExp(search.trim(), "i");
+    filter.$or = [
+      { customerName: regex },
+      { phoneNumber: regex },
+      { productName: regex },
+      { employeeName: regex },
+      { customerId: regex },
+    ];
+  }
+
+  // Sorting
+  let sortSpec = { date: -1 }; // default: newest first
+
+  // Support both `sort` ("date_desc") and `sortBy` + `sortOrder`
+  const sortKey = sort || sortBy;
+  const sortDir =
+    sortOrder === "asc" || sortKey?.endsWith("_asc") ? 1 : -1;
+
+  if (sortKey) {
+    if (sortKey.startsWith("date")) {
+      sortSpec = { date: sortDir };
+    } else if (sortKey.includes("amount")) {
+      sortSpec = { finalAmount: sortDir };
+    } else {
+      // fallback
+      sortSpec = { date: -1 };
+    }
+  }
+
+  // Run query + metrics in parallel
+  const [sales, metrics] = await Promise.all([
+    Sale.find(filter)
+      .sort(sortSpec)
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum),
+    Sale.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          totalUnitsSold: { $sum: "$quantity" },
+          totalAmount: { $sum: "$finalAmount" },
+          avgOrderAmount: { $avg: "$finalAmount" },
+          totalCount: { $sum: 1 },
+        },
+      },
+    ]),
+  ]);
+
+  const agg = metrics[0] || {
+    totalUnitsSold: 0,
+    totalAmount: 0,
+    avgOrderAmount: 0,
+    totalCount: 0,
+  };
+
+  const totalPages =
+    agg.totalCount > 0 ? Math.ceil(agg.totalCount / limitNum) : 1;
 
   return {
-    data: pageItems,
-    totalItems,
+    data: sales,
+    page: pageNum,
     totalPages,
-    page: currentPage
+    totalCount: agg.totalCount,
+    metrics: {
+      totalUnitsSold: agg.totalUnitsSold,
+      totalAmount: agg.totalAmount,
+      avgOrderAmount: agg.avgOrderAmount,
+    },
   };
-};
+}

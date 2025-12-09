@@ -22,3 +22,12 @@ app.use("/api/sales", salesRouter);
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Backend server listening on port ${PORT}`);
 });
+
+
+app.use("/api/sales", salesRouter);
+
+// simple error handler so app doesn't crash silently
+app.use((err, req, res, next) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({ error: "Internal server error" });
+});
