@@ -1,6 +1,6 @@
 # Retail Sales Management System
 
-## 1. Overview (3–5 lines)
+## 1. Overview 
 
 This project is a full-stack Retail Sales Management System built for the TruEstate SDE Intern assignment. It loads a structured sales dataset and exposes a backend API that supports combined search, multi-select filters, sorting, and pagination. The React frontend provides a clean UI (search bar, filter panel, transaction table, sorting dropdown, and pagination controls) aligned with the provided structure.
 
